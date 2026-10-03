@@ -3,6 +3,18 @@
 Repositório padrão de ferramentas pessoais (Wittemberg / Hermes). Scripts pensados para
 execução em uma linha, idempotentes e com rollback descrito no cabeçalho.
 
+### install-kb5129237-server-2022.ps1
+
+Detecta e valida Windows Server 2022 x64 (build 20348), verifica se a KB5129237 já está instalada, baixa o MSU oficial do Microsoft Update Catalog e inicia a instalação silenciosa com `/norestart`. Exige PowerShell elevado. Se o WUSA retornar 3010, a atualização foi instalada e o Windows indicou que será necessário reiniciar; o script não reinicia o servidor automaticamente. O pacote tem aproximadamente 560 MB.
+
+PowerShell como Administrador:
+
+```powershell
+[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; irm https://raw.githubusercontent.com/Wittemberg/utilitarios/main/windows/install-kb5129237-server-2022.ps1 | iex
+```
+
+O script é específico para Windows Server 2022 x64 e KB5129237. Em outro sistema, não instala a atualização.
+
 ## windows/
 
 ### hermes-ssh-setup.ps1
