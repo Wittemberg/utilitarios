@@ -19,7 +19,7 @@ O script é específico para Windows Server 2022 x64 e KB5129237. Em outro siste
 
 ### preparar-servidor-linux.sh
 
-Prepara Ubuntu/Debian: atualiza o sistema, instala ferramentas, configura timezone/locale, Chrony, Fail2ban, chave SSH e hardening opcional do SSH. Pergunta se deve criar swap e seu tamanho (GiB), e se o servidor é um host Proxmox para aplicar `vm.swappiness=10` e ajustes KSM. Faz backup dos arquivos alterados, valida o SSH antes de reiniciar o serviço e não reinicia o servidor.
+Prepara Ubuntu/Debian: atualiza o sistema, instala ferramentas, configura timezone/locale, Chrony, Fail2ban, chave SSH e hardening opcional do SSH. Pergunta se deve criar swap e seu tamanho (GiB), e se o servidor é um host Proxmox para aplicar `vm.swappiness=10` e ajustes KSM. Antes de criar swap, verifica espaço disponível na raiz e preserva ao menos 2 GiB livres; em caso de falha ou interrupção, remove o arquivo parcial criado nesta execução. Faz backup dos arquivos alterados, valida o SSH antes de reiniciar o serviço e não reinicia o servidor.
 
 Requer root, terminal interativo e conectividade com os repositórios. Antes de aceitar aplicar o hardening SSH, confirme que TCP/5822 está liberada no firewall e que há console/acesso alternativo; a autenticação por senha será desabilitada. Revise `ignoreip` do Fail2ban para incluir os IPs administrativos necessários. A escolha Proxmox aplica os ajustes ao host; não execute em LXC/VM convidada esperando que controle KSM do host.
 

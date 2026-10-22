@@ -10,6 +10,14 @@ readonly PUBLIC_KEY='ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDeEaZtxz6NNXm7N//QdvT
 
 log() { printf '\n==> %s\n' "$*"; }
 die() { printf 'ERRO: %s\n' "$*" >&2; exit 1; }
+SWAP_FILE_IN_PROGRESS=0
+cleanup_partial_swap() {
+    if (( SWAP_FILE_IN_PROGRESS )); then
+        printf '\nInterrupção/falha durante criação da swap; removendo /swapfile parcial desta execução.\n' >&2
+        rm -f /swapfile
+    fi
+}
+trap cleanup_partial_swap EXIT
 ask_yes_no() {
     local prompt=$1 answer
     while true; do
@@ -115,14 +123,24 @@ if ask_yes_no 'Deseja criar/ativar um arquivo de swap?'; then
             [[ $swap_gib =~ ^[1-9][0-9]*$ ]] && (( swap_gib <= 1024 )) && break
             printf 'Informe um número inteiro entre 1 e 1024.\n'
         done
+        swap_bytes=$((swap_gib * 1024 * 1024 * 1024))
+        swap_avail=$(df -B1 --output=avail / | tail -n 1 | tr -d ' ')
+        reserve_bytes=$((2 * 1024 * 1024 * 1024))
+        if (( swap_avail < swap_bytes + reserve_bytes )); then
+            printf 'Espaço insuficiente em /: disponível %s GiB; solicitados %s GiB, além da reserva obrigatória de 2 GiB.\n' \
+                "$(awk -v n="$swap_avail" 'BEGIN {printf "%.1f", n/1073741824}')" "$swap_gib" >&2
+            die 'Swap cancelada antes da gravação. Libere espaço ou escolha um tamanho menor.'
+        fi
+        SWAP_FILE_IN_PROGRESS=1
         if ! fallocate -l "${swap_gib}G" /swapfile; then
+            printf 'fallocate falhou; usando dd após verificação de espaço.\n'
             rm -f /swapfile
-            log 'fallocate falhou; usando dd para criar a swap'
-            dd if=/dev/zero of=/swapfile bs=1M count=$((swap_gib * 1024)) status=progress
+            dd if=/dev/zero of=/swapfile bs=1M count=$((swap_gib * 1024)) conv=fsync status=progress
         fi
         chmod 600 /swapfile
         mkswap /swapfile
         swapon /swapfile
+        SWAP_FILE_IN_PROGRESS=0
         cp -a /etc/fstab "/etc/fstab.bak.$(date +%F_%H-%M-%S)"
         grep -qE '^/swapfile[[:space:]]' /etc/fstab || printf '/swapfile none swap sw 0 0\n' >> /etc/fstab
     fi
