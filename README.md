@@ -26,7 +26,7 @@ Requer root, terminal interativo e conectividade com os repositórios. Antes de 
 Ubuntu/Debian, como root:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Wittemberg/utilitarios/main/linux/preparar-servidor-linux.sh | bash
+bash <(curl -fsSL "https://raw.githubusercontent.com/Wittemberg/utilitarios/main/linux/preparar-servidor-linux.sh?v=$(date +%s)")
 ```
 
 A execução é interativa. O script não cria snapshot e não reinicia o servidor. Os backups ficam ao lado dos arquivos alterados; rollback de SSH: copie o backup informado pelo script de volta para `/etc/ssh/sshd_config` e valide com `sshd -t` antes de reiniciar `ssh`.
