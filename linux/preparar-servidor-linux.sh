@@ -177,9 +177,37 @@ fi
 
 log 'Instalando chave pública'
 install -d -m 700 /root/.ssh
-touch /root/.ssh/authorized_keys
-chmod 600 /root/.ssh/authorized_keys
-grep -qxF "$PUBLIC_KEY" /root/.ssh/authorized_keys || printf '%s\n' "$PUBLIC_KEY" >> /root/.ssh/authorized_keys
+authorized_keys=/root/.ssh/authorized_keys
+if [[ -L $authorized_keys ]]; then
+    authorized_target=$(readlink -f "$authorized_keys")
+    if [[ $authorized_target == /etc/pve/priv/authorized_keys ]]; then
+        [[ -e $authorized_target ]] || die 'O destino Proxmox de authorized_keys não existe.'
+        if ! grep -qxF "$PUBLIC_KEY" "$authorized_keys"; then
+            cp -a "$authorized_target" "/root/.ssh/authorized_keys.bak.$(date +%F_%H-%M-%S)"
+            if [[ -s $authorized_target ]] && [[ $(tail -c 1 "$authorized_target" | wc -l) -eq 0 ]]; then
+                printf '\n' >> "$authorized_keys"
+            fi
+            printf '%s\n' "$PUBLIC_KEY" >> "$authorized_keys"
+        fi
+        grep -qxF "$PUBLIC_KEY" "$authorized_keys" || die 'Não foi possível validar a chave no authorized_keys gerenciado pelo Proxmox.'
+        printf 'Chave adicionada ao authorized_keys gerenciado pelo Proxmox; link e permissões preservados.\n'
+    else
+        die "authorized_keys é link simbólico para destino inesperado: $authorized_target. Nenhuma alteração feita."
+    fi
+else
+    if [[ ! -e $authorized_keys ]]; then
+        install -m 600 /dev/null "$authorized_keys"
+    else
+        chmod 600 "$authorized_keys"
+    fi
+    grep -qxF "$PUBLIC_KEY" "$authorized_keys" || {
+        if [[ -s $authorized_keys ]] && [[ $(tail -c 1 "$authorized_keys" | wc -l) -eq 0 ]]; then
+            printf '\n' >> "$authorized_keys"
+        fi
+        printf '%s\n' "$PUBLIC_KEY" >> "$authorized_keys"
+    }
+    chmod 600 "$authorized_keys"
+fi
 
 log 'Preparando hardening do SSH'
 sshd_config=/etc/ssh/sshd_config
