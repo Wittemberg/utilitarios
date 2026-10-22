@@ -231,7 +231,7 @@ cp -a "$sshd_config" "$ssh_backup"
 set_sshd_option() {
     local key=$1 value=$2
     if grep -qiE "^[[:space:]#]*${key}[[:space:]]" "$sshd_config"; then
-        sed -i -E "0,/^[[:space:]#]*${key}[[:space:]]+.*/s//${key} ${value}/I" "$sshd_config"
+        sed -i -E "0,/^[[:space:]#]*${key}[[:space:]]+.*/s|^[[:space:]#]*${key}[[:space:]]+.*|${key} ${value}|I" "$sshd_config"
     else
         printf '\n%s %s\n' "$key" "$value" >> "$sshd_config"
     fi
