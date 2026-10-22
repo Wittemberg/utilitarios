@@ -13,7 +13,7 @@ die() { printf 'ERRO: %s\n' "$*" >&2; exit 1; }
 ask_yes_no() {
     local prompt=$1 answer
     while true; do
-        read -r -p "$prompt [s/N]: " answer
+        read -r -p "$prompt [s/N]: " answer </dev/tty
         case "$answer" in
             s|S|sim|SIM|Sim) return 0 ;;
             n|N|nao|não|NAO|NÃO|"") return 1 ;;
@@ -26,7 +26,7 @@ ask_yes_no() {
 [[ -r /etc/os-release ]] || die 'Não foi possível identificar a distribuição.'
 . /etc/os-release
 [[ ${ID:-} == ubuntu || ${ID:-} == debian ]] || die "Distribuição não suportada: ${PRETTY_NAME:-desconhecida}. Somente Ubuntu/Debian."
-[[ -t 0 ]] || die 'Este script requer terminal interativo para as decisões de swap, Proxmox e SSH.'
+[[ -r /dev/tty ]] || die 'Este script requer um terminal interativo para as decisões de swap, Proxmox e SSH.'
 
 log 'Atualizando pacotes do sistema'
 export DEBIAN_FRONTEND=noninteractive
@@ -111,7 +111,7 @@ if ask_yes_no 'Deseja criar/ativar um arquivo de swap?'; then
         die '/swapfile já existe, mas não está ativo. Verifique-o manualmente; não será sobrescrito.'
     else
         while true; do
-            read -r -p 'Tamanho da swap em GiB (ex.: 2, 8, 32): ' swap_gib
+            read -r -p 'Tamanho da swap em GiB (ex.: 2, 8, 32): ' swap_gib </dev/tty
             [[ $swap_gib =~ ^[1-9][0-9]*$ ]] && (( swap_gib <= 1024 )) && break
             printf 'Informe um número inteiro entre 1 e 1024.\n'
         done
