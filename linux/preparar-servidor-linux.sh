@@ -178,19 +178,33 @@ fi
 log 'Instalando chave pública'
 install -d -m 700 /root/.ssh
 authorized_keys=/root/.ssh/authorized_keys
+sshd_authorized_keys='.ssh/authorized_keys'
 if [[ -L $authorized_keys ]]; then
     authorized_target=$(readlink -f "$authorized_keys")
     if [[ $authorized_target == /etc/pve/priv/authorized_keys ]]; then
         [[ -e $authorized_target ]] || die 'O destino Proxmox de authorized_keys não existe.'
-        if ! grep -qxF "$PUBLIC_KEY" "$authorized_keys"; then
-            cp -a "$authorized_target" "/root/.ssh/authorized_keys.bak.$(date +%F_%H-%M-%S)"
-            if [[ -s $authorized_target ]] && [[ $(tail -c 1 "$authorized_target" | wc -l) -eq 0 ]]; then
-                printf '\n' >> "$authorized_keys"
+        if grep -qxF "$PUBLIC_KEY" "$authorized_keys"; then
+            printf 'Chave já existe no authorized_keys gerenciado pelo Proxmox; nenhum arquivo compartilhado foi alterado.\n'
+        else
+            # Não escrever no pmxcfs: em alguns estados/versões ele retorna EIO para append.
+            # Usa arquivo local adicional e mantém o arquivo compartilhado intacto.
+            local_authorized_keys=/root/.ssh/authorized_keys.hermes
+            if [[ ! -e $local_authorized_keys ]]; then
+                install -m 600 /dev/null "$local_authorized_keys"
+            else
+                chmod 600 "$local_authorized_keys"
             fi
-            printf '%s\n' "$PUBLIC_KEY" >> "$authorized_keys"
+            if ! grep -qxF "$PUBLIC_KEY" "$local_authorized_keys"; then
+                if [[ -s $local_authorized_keys ]] && [[ $(tail -c 1 "$local_authorized_keys" | wc -l) -eq 0 ]]; then
+                    printf '\n' >> "$local_authorized_keys"
+                fi
+                printf '%s\n' "$PUBLIC_KEY" >> "$local_authorized_keys"
+            fi
+            grep -qxF "$PUBLIC_KEY" "$local_authorized_keys" || die 'Não foi possível validar a chave no arquivo local adicional.'
+            chmod 600 "$local_authorized_keys"
+            sshd_authorized_keys='.ssh/authorized_keys .ssh/authorized_keys.hermes'
+            printf 'Chave gravada em arquivo local adicional; authorized_keys do Proxmox foi preservado.\n'
         fi
-        grep -qxF "$PUBLIC_KEY" "$authorized_keys" || die 'Não foi possível validar a chave no authorized_keys gerenciado pelo Proxmox.'
-        printf 'Chave adicionada ao authorized_keys gerenciado pelo Proxmox; link e permissões preservados.\n'
     else
         die "authorized_keys é link simbólico para destino inesperado: $authorized_target. Nenhuma alteração feita."
     fi
@@ -224,7 +238,7 @@ set_sshd_option() {
 }
 set_sshd_option Port "$SSH_PORT"
 set_sshd_option PubkeyAuthentication yes
-set_sshd_option AuthorizedKeysFile .ssh/authorized_keys
+set_sshd_option AuthorizedKeysFile "$sshd_authorized_keys"
 set_sshd_option PasswordAuthentication no
 set_sshd_option ChallengeResponseAuthentication no
 set_sshd_option KbdInteractiveAuthentication no
