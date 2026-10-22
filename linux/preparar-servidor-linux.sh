@@ -111,15 +111,26 @@ fail2ban-client -t
 systemctl enable --now fail2ban
 systemctl restart fail2ban
 
-log 'Swap e parâmetros de memória'
-if ask_yes_no 'Deseja criar/ativar um arquivo de swap?'; then
+log 'Diagnóstico de memória e swap existente'
+free -h
+swapon --show
+active_swap_bytes=$(swapon --show=SIZE --bytes --noheadings | awk '{sum += $1} END {print sum+0}')
+if (( active_swap_bytes > 0 )); then
+    active_swap_gib=$(awk -v n="$active_swap_bytes" 'BEGIN {printf "%.1f", n/1073741824}')
+    printf 'Já existe %.1f GiB de swap ativa. A próxima opção adiciona swap além dessa quantidade.\n' "$active_swap_gib"
+    create_swap_prompt='Avaliou a memória/swap acima e confirma que precisa adicionar mais swap?'
+else
+    printf 'Nenhuma swap ativa foi detectada.\n'
+    create_swap_prompt='Deseja criar swap? Só prossiga se houver necessidade para esta carga de trabalho.'
+fi
+if ask_yes_no "$create_swap_prompt"; then
     if swapon --show=NAME --noheadings | grep -Fxq /swapfile; then
         printf 'O arquivo /swapfile já está ativo; não será recriado.\n'
     elif [[ -e /swapfile ]]; then
         die '/swapfile já existe, mas não está ativo. Verifique-o manualmente; não será sobrescrito.'
     else
         while true; do
-            read -r -p 'Tamanho da swap em GiB (ex.: 2, 8, 32): ' swap_gib </dev/tty
+            read -r -p 'Tamanho adicional de swap em GiB (ex.: 2, 8, 32): ' swap_gib </dev/tty
             [[ $swap_gib =~ ^[1-9][0-9]*$ ]] && (( swap_gib <= 1024 )) && break
             printf 'Informe um número inteiro entre 1 e 1024.\n'
         done
