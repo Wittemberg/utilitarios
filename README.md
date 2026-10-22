@@ -15,6 +15,22 @@ PowerShell como Administrador:
 
 O script é específico para Windows Server 2022 x64 e KB5129237. Em outro sistema, não instala a atualização.
 
+## linux/
+
+### preparar-servidor-linux.sh
+
+Prepara Ubuntu/Debian: atualiza o sistema, instala ferramentas, configura timezone/locale, Chrony, Fail2ban, chave SSH e hardening opcional do SSH. Pergunta se deve criar swap e seu tamanho (GiB), e se o servidor é um host Proxmox para aplicar `vm.swappiness=10` e ajustes KSM. Faz backup dos arquivos alterados, valida o SSH antes de reiniciar o serviço e não reinicia o servidor.
+
+Requer root, terminal interativo e conectividade com os repositórios. Antes de aceitar aplicar o hardening SSH, confirme que TCP/5822 está liberada no firewall e que há console/acesso alternativo; a autenticação por senha será desabilitada. Revise `ignoreip` do Fail2ban para incluir os IPs administrativos necessários. A escolha Proxmox aplica os ajustes ao host; não execute em LXC/VM convidada esperando que controle KSM do host.
+
+Ubuntu/Debian, como root:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Wittemberg/utilitarios/main/linux/preparar-servidor-linux.sh | bash
+```
+
+A execução é interativa. O script não cria snapshot e não reinicia o servidor. Os backups ficam ao lado dos arquivos alterados; rollback de SSH: copie o backup informado pelo script de volta para `/etc/ssh/sshd_config` e valide com `sshd -t` antes de reiniciar `ssh`.
+
 ## windows/
 
 ### hermes-ssh-setup.ps1
