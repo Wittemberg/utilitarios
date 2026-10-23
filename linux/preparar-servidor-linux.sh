@@ -236,11 +236,8 @@ if [[ -e $sshd_local_config ]]; then
 else
     ssh_backup=
 fi
-current_ports=$(sshd -T | awk '$1 == "port" {print $2}')
-[[ -n $current_ports ]] || current_ports=22
-port_list=$(printf '%s\n' "$current_ports" "$SSH_PORT" | awk '!seen[$0]++')
 {
-    while IFS= read -r port; do printf 'Port %s\n' "$port"; done <<< "$port_list"
+    printf 'Port %s\n' "$SSH_PORT"
     printf 'PubkeyAuthentication yes\n'
     printf 'AuthorizedKeysFile %s\n' "$sshd_authorized_keys"
     printf 'PasswordAuthentication no\n'
@@ -257,13 +254,18 @@ if ! sshd -t; then
     restore_ssh_config
     die 'Configuração SSH inválida; arquivo local restaurado. O serviço não foi recarregado.'
 fi
+effective_ssh=$(sshd -T)
+if [[ $(printf '%s\n' "$effective_ssh" | awk '$1 == "port" {count++} END {print count+0}') -ne 1 ]] || ! printf '%s\n' "$effective_ssh" | grep -qx "port ${SSH_PORT}"; then
+    restore_ssh_config
+    die 'A porta efetiva não ficou exclusivamente em 5822. Arquivo local restaurado; verifique outras diretivas Port ativas.'
+fi
 printf 'Configuração SSH local: %s\n' "$sshd_local_config"
 if [[ -n $ssh_backup ]]; then
     printf 'Backup SSH: %s\n' "$ssh_backup"
 fi
-printf 'Portas efetivas antes da ativação: %s\n' "$(sshd -T | awk '$1 == "port" {printf "%s%s", sep, $2; sep=" "}')"
+printf 'Porta efetiva: %s\n' "$(printf '%s\n' "$effective_ssh" | awk '$1 == "port" {print $2}')"
 printf 'Confirme que a porta TCP %s está liberada no firewall local e externo.\n' "$SSH_PORT"
-if ask_yes_no 'Aplicar SSH em duas etapas, mantendo as portas atuais e habilitando a porta nova?'; then
+if ask_yes_no 'Aplicar SSH exclusivamente na porta 5822 e desativar autenticação por senha?'; then
     if ! systemctl reload ssh || ! systemctl is-active --quiet ssh; then
         restore_ssh_config
         if sshd -t; then
@@ -272,22 +274,19 @@ if ask_yes_no 'Aplicar SSH em duas etapas, mantendo as portas atuais e habilitan
         die 'Falha ao recarregar SSH; configuração anterior restaurada.'
     fi
     effective_ssh=$(sshd -T)
-    printf '%s\n' "$effective_ssh" | grep -q "^port ${SSH_PORT}$" || die 'A porta nova não aparece na configuração efetiva.'
-    printf 'Portas efetivas: %s\n' "$(printf '%s\n' "$effective_ssh" | awk '$1 == "port" {printf "%s%s", sep, $2; sep=" "}')"
-    printf 'Listeners SSH:\n'
-    ss -lntp | grep -E 'sshd.*(:22|:5822)\b' || true
-    printf 'Abra uma nova sessão SSH pela porta %s e mantenha esta sessão aberta.\n' "$SSH_PORT"
-    if ask_yes_no 'A nova conexão pela porta nova foi testada e funcionou?'; then
-        printf 'Porta antiga preservada; remova-a manualmente somente após confirmar o acesso pela nova porta.\n'
-    else
+    if [[ $(printf '%s\n' "$effective_ssh" | awk '$1 == "port" {count++} END {print count+0}') -ne 1 ]] || ! printf '%s\n' "$effective_ssh" | grep -qx "port ${SSH_PORT}" || ! printf '%s\n' "$effective_ssh" | grep -qx 'passwordauthentication no'; then
         restore_ssh_config
         if sshd -t; then
-            systemctl reload ssh || die 'Rollback aplicado, mas valide o serviço SSH pelo console.'
+            systemctl reload ssh || die 'Rollback gravado, mas recarga falhou; valide pelo console.'
         else
             die 'Rollback gravado, mas a configuração anterior falhou em sshd -t; valide pelo console.'
         fi
-        printf 'Alteração SSH revertida; portas anteriores restauradas.\n'
+        die 'Validação pós-recarga falhou; configuração anterior restaurada.'
     fi
+    systemctl is-active --quiet ssh || die 'O serviço SSH não está ativo após a alteração.'
+    printf 'Listeners SSH:\n'
+    ss -lntp | grep -E 'sshd.*:5822' || die 'Porta 5822 não aparece em escuta.'
+    printf 'SSH ativo exclusivamente na porta 5822; autenticação por senha desativada.\n'
 else
     restore_ssh_config
     printf 'Alteração SSH cancelada; configuração local anterior preservada.\n'
