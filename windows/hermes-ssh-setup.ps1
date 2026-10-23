@@ -13,7 +13,7 @@
 #
 #  Variaveis de ambiente opcionais (definir ANTES do irm):
 #    $env:HERMES_SSH_PORT      = '5822'                       # porta TCP (padrao 5822)
-#    $env:HERMES_SSH_ALLOW     = '177.136.234.234,10.8.0.0/24' # origens permitidas no firewall (padrao: IP do Hermes)
+#    $env:HERMES_SSH_ALLOW     = '177.136.234.234,10.10.1.0/24,10.8.0.0/24' # Hermes externo + WireGuard + OpenVPN (padrao)
 #    $env:HERMES_SSH_ALLOW     = 'Any'                        # abre para qualquer origem (nao recomendado)
 #    $env:HERMES_SSH_PASSWORD  = 'yes'                        # mantem login por senha (padrao: no)
 #
@@ -28,9 +28,31 @@ $Port = 5822
 if ($env:HERMES_SSH_PORT -match '^\d+$') { $Port = [int]$env:HERMES_SSH_PORT }
 
 $HermesIP = '177.136.234.234'
-$AllowRaw = if ($env:HERMES_SSH_ALLOW) { $env:HERMES_SSH_ALLOW } else { $HermesIP }
+$DefaultAllow = @($HermesIP, '10.10.1.0/24', '10.8.0.0/24')
+$AllowRaw = if ($env:HERMES_SSH_ALLOW) { $env:HERMES_SSH_ALLOW } else { $DefaultAllow -join ',' }
 $AllowAny = ($AllowRaw.Trim() -ieq 'Any')
 $Allow    = @($AllowRaw -split '[,; ]+' | Where-Object { $_ -and $_ -ine 'Any' })
+
+if ($Port -lt 1 -or $Port -gt 65535) { throw "Porta SSH invalida: $Port. Use valor entre 1 e 65535." }
+if (-not $AllowAny) {
+    if ($Allow.Count -eq 0) { throw 'HERMES_SSH_ALLOW não contém origem válida. Informe IP/CIDR explícito ou Any deliberadamente.' }
+    foreach ($Entry in $Allow) {
+        $Parts = $Entry -split '/', 2
+        $ParsedAddress = $null
+        if (-not [System.Net.IPAddress]::TryParse($Parts[0], [ref]$ParsedAddress)) {
+            throw "Origem de firewall invalida: '$Entry'. Informe IP/CIDR valido ou Any explicitamente."
+        }
+        if ($ParsedAddress.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) {
+            throw "Somente IPv4 foi validado neste script; origem invalida: '$Entry'."
+        }
+        if ($Parts.Count -eq 2) {
+            $Prefix = 0
+            if (-not [int]::TryParse($Parts[1], [ref]$Prefix) -or $Prefix -lt 0 -or $Prefix -gt 32) {
+                throw "Prefixo IPv4 invalido em '$Entry'. Use valor de 0 a 32."
+            }
+        }
+    }
+}
 
 $PasswordAuth = if ($env:HERMES_SSH_PASSWORD -match '^(yes|true|1)$') { 'yes' } else { 'no' }
 
