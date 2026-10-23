@@ -117,7 +117,7 @@ swapon --show
 active_swap_bytes=$(swapon --show=SIZE --bytes --noheadings | awk '{sum += $1} END {print sum+0}')
 if (( active_swap_bytes > 0 )); then
     active_swap_gib=$(awk -v n="$active_swap_bytes" 'BEGIN {printf "%.1f", n/1073741824}')
-    printf 'Já existe %.1f GiB de swap ativa. A próxima opção adiciona swap além dessa quantidade.\n' "$active_swap_gib"
+    printf 'Já existe %s GiB de swap ativa. A próxima opção adiciona swap além dessa quantidade.\n' "$active_swap_gib"
     create_swap_prompt='Avaliou a memória/swap acima e confirma que precisa adicionar mais swap?'
 else
     printf 'Nenhuma swap ativa foi detectada.\n'
@@ -226,37 +226,71 @@ fi
 log 'Preparando hardening do SSH'
 sshd_config=/etc/ssh/sshd_config
 [[ -f $sshd_config ]] || die "Arquivo ausente: $sshd_config"
-ssh_backup="${sshd_config}.bak_$(date +%F_%H-%M-%S)"
-cp -a "$sshd_config" "$ssh_backup"
-set_sshd_option() {
-    local key=$1 value=$2
-    if grep -qiE "^[[:space:]#]*${key}[[:space:]]" "$sshd_config"; then
-        sed -i -E "0,/^[[:space:]#]*${key}[[:space:]]+.*/s|^[[:space:]#]*${key}[[:space:]]+.*|${key} ${value}|I" "$sshd_config"
-    else
-        printf '\n%s %s\n' "$key" "$value" >> "$sshd_config"
-    fi
-}
-set_sshd_option Port "$SSH_PORT"
-set_sshd_option PubkeyAuthentication yes
-set_sshd_option AuthorizedKeysFile "$sshd_authorized_keys"
-set_sshd_option PasswordAuthentication no
-set_sshd_option ChallengeResponseAuthentication no
-set_sshd_option KbdInteractiveAuthentication no
-set_sshd_option MaxAuthTries 3
-set_sshd_option LoginGraceTime 30
-if ! sshd -t; then
-    cp -a "$ssh_backup" "$sshd_config"
-    die "Configuração SSH inválida; backup restaurado de $ssh_backup. SSH não foi reiniciado."
-fi
-printf 'Backup SSH: %s\n' "$ssh_backup"
-printf 'A alteração de SSH exige porta TCP %s liberada no firewall/console.\n' "$SSH_PORT"
-if ask_yes_no 'Aplicar agora a configuração SSH reiniciando o serviço? Confirme acesso alternativo/console.'; then
-    systemctl restart ssh
-    systemctl is-active --quiet ssh || die 'O serviço SSH não ficou ativo. Consulte o backup informado acima.'
-    printf 'SSH ativo após a alteração.\n'
+sshd_dropin_dir=/etc/ssh/sshd_config.d
+sshd_local_config=${sshd_dropin_dir}/00-local-ssh.conf
+[[ -d $sshd_dropin_dir ]] || die "Diretório de configuração SSH ausente: $sshd_dropin_dir"
+grep -qF 'Include /etc/ssh/sshd_config.d/*.conf' "$sshd_config" || die 'O sshd_config não inclui sshd_config.d/*.conf; nenhuma alteração SSH foi aplicada.'
+if [[ -e $sshd_local_config ]]; then
+    ssh_backup="${sshd_local_config}.bak_$(date +%F_%H-%M-%S)"
+    cp -a "$sshd_local_config" "$ssh_backup"
 else
-    cp -a "$ssh_backup" "$sshd_config"
-    printf 'Alteração SSH cancelada; configuração anterior restaurada.\n'
+    ssh_backup=
+fi
+current_ports=$(sshd -T | awk '$1 == "port" {print $2}')
+[[ -n $current_ports ]] || current_ports=22
+port_list=$(printf '%s\n' "$current_ports" "$SSH_PORT" | awk '!seen[$0]++')
+{
+    while IFS= read -r port; do printf 'Port %s\n' "$port"; done <<< "$port_list"
+    printf 'PubkeyAuthentication yes\n'
+    printf 'AuthorizedKeysFile %s\n' "$sshd_authorized_keys"
+    printf 'PasswordAuthentication no\n'
+    printf 'ChallengeResponseAuthentication no\n'
+    printf 'KbdInteractiveAuthentication no\n'
+    printf 'MaxAuthTries 3\n'
+    printf 'LoginGraceTime 30\n'
+} > "$sshd_local_config"
+chmod 644 "$sshd_local_config"
+restore_ssh_config() {
+    if [[ -n $ssh_backup ]]; then cp -a "$ssh_backup" "$sshd_local_config"; else rm -f "$sshd_local_config"; fi
+}
+if ! sshd -t; then
+    restore_ssh_config
+    die 'Configuração SSH inválida; arquivo local restaurado. O serviço não foi recarregado.'
+fi
+printf 'Configuração SSH local: %s\n' "$sshd_local_config"
+if [[ -n $ssh_backup ]]; then
+    printf 'Backup SSH: %s\n' "$ssh_backup"
+fi
+printf 'Portas efetivas antes da ativação: %s\n' "$(sshd -T | awk '$1 == "port" {printf "%s%s", sep, $2; sep=" "}')"
+printf 'Confirme que a porta TCP %s está liberada no firewall local e externo.\n' "$SSH_PORT"
+if ask_yes_no 'Aplicar SSH em duas etapas, mantendo as portas atuais e habilitando a porta nova?'; then
+    if ! systemctl reload ssh || ! systemctl is-active --quiet ssh; then
+        restore_ssh_config
+        if sshd -t; then
+            systemctl reload ssh || true
+        fi
+        die 'Falha ao recarregar SSH; configuração anterior restaurada.'
+    fi
+    effective_ssh=$(sshd -T)
+    printf '%s\n' "$effective_ssh" | grep -q "^port ${SSH_PORT}$" || die 'A porta nova não aparece na configuração efetiva.'
+    printf 'Portas efetivas: %s\n' "$(printf '%s\n' "$effective_ssh" | awk '$1 == "port" {printf "%s%s", sep, $2; sep=" "}')"
+    printf 'Listeners SSH:\n'
+    ss -lntp | grep -E 'sshd.*(:22|:5822)\b' || true
+    printf 'Abra uma nova sessão SSH pela porta %s e mantenha esta sessão aberta.\n' "$SSH_PORT"
+    if ask_yes_no 'A nova conexão pela porta nova foi testada e funcionou?'; then
+        printf 'Porta antiga preservada; remova-a manualmente somente após confirmar o acesso pela nova porta.\n'
+    else
+        restore_ssh_config
+        if sshd -t; then
+            systemctl reload ssh || die 'Rollback aplicado, mas valide o serviço SSH pelo console.'
+        else
+            die 'Rollback gravado, mas a configuração anterior falhou em sshd -t; valide pelo console.'
+        fi
+        printf 'Alteração SSH revertida; portas anteriores restauradas.\n'
+    fi
+else
+    restore_ssh_config
+    printf 'Alteração SSH cancelada; configuração local anterior preservada.\n'
 fi
 
 log 'Resumo'
