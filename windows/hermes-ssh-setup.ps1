@@ -167,7 +167,16 @@ if ($Legacy -and -not $AllowAny) {
 $MsiRule = Get-NetFirewallRule -DisplayName 'OpenSSH SSH Server Preview (sshd)' -ErrorAction SilentlyContinue
 if ($MsiRule -and $MsiRule.Enabled -eq 'True') {
     Warn "Regra do instalador MSI ('OpenSSH SSH Server Preview (sshd)', TCP 22) esta habilitada."
-    Warn "Desabilite apos validar:  Disable-NetFirewallRule -DisplayName 'OpenSSH SSH Server Preview (sshd)'"
+    $MsiPort = $MsiRule | Get-NetFirewallPortFilter
+    $MsiAddresses = $MsiRule | Get-NetFirewallAddressFilter
+    if (@($MsiPort.LocalPort) -contains '22' -and -not $AllowAny) {
+        Disable-NetFirewallRule -InputObject $MsiRule
+        $MsiRule = Get-NetFirewallRule -DisplayName 'OpenSSH SSH Server Preview (sshd)' -ErrorAction SilentlyContinue
+        if ($MsiRule.Enabled -eq 'True') { throw "Nao foi possivel desabilitar a regra aberta do instalador na porta 22. Regra permanece habilitada; verificar manualmente." }
+        Ok "Regra padrao TCP 22 desabilitada. Rollback: Enable-NetFirewallRule -DisplayName 'OpenSSH SSH Server Preview (sshd)'"
+    } else {
+        Warn "A regra MSI nao foi desabilitada automaticamente: porta inesperada ou regra SSH aberta intencionalmente (Any)."
+    }
 }
 
 # --------------------------- sshd_config ---------------------------
