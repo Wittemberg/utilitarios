@@ -7,13 +7,19 @@
   Uso simples: sem parâmetros = auditoria; -Apply = executa o baseline aprovado.
   O apply configura política local de senha/bloqueio, NTP a.ntp.br, política de
   Windows Update e SSH Hermes (porta 5822, somente chave, origens restritas).
+  -CleanupTemp remove arquivos com mais de 48 horas apenas em Windows Temp e TEMP do operador; perfis/caches ficam intactos.
+  -TuneOptionalServices é adicional e altera apenas inicialização de serviços não críticos; não apaga dados e preserva BITS, CryptSvc, IP Helper, Windows Update e Defender.
   Requer hermes-ssh-setup.ps1 ao lado do script. Comando em uma linha (baixa ambos para uma pasta local e executa Apply):
-  $d="$env:TEMP\WittembergServerPrep"; New-Item -ItemType Directory -Force $d | Out-Null; [Net.ServicePointManager]::SecurityProtocol='Tls12'; irm https://raw.githubusercontent.com/Wittemberg/utilitarios/main/windows/Preparar-Servidor-Windows.ps1 -OutFile "$d\Preparar-Servidor-Windows.ps1"; irm https://raw.githubusercontent.com/Wittemberg/utilitarios/main/windows/hermes-ssh-setup.ps1 -OutFile "$d\hermes-ssh-setup.ps1"; Unblock-File "$d\*.ps1"; & "$d\Preparar-Servidor-Windows.ps1" -Apply
+  $d="$env:TEMP\WittembergServerPrep"; New-Item -ItemType Directory -Force $d | Out-Null; [Net.ServicePointManager]::SecurityProtocol='Tls12'; irm https://raw.githubusercontent.com/Wittemberg/utilitarios/main/windows/Preparar-Servidor-Windows.ps1 -OutFile "$d\Preparar-Servidor-Windows.ps1"; irm https://raw.githubusercontent.com/Wittemberg/utilitarios/main/windows/hermes-ssh-setup.ps1 -OutFile "$d\hermes-ssh-setup.ps1"; Unblock-File "$d\*.ps1"; & "$d\Preparar-Servidor-Windows.ps1" -Apply -CleanupTemp -TuneOptionalServices
   Não reinicia o Windows, não desativa Defender/UAC/firewall e não abre RDP.
   Execute manualmente no servidor novo, como Administrador, com acesso ao console.
 #>
 [CmdletBinding(SupportsShouldProcess=$true, ConfirmImpact='Low')]
-param([switch]$Apply)
+param(
+    [switch]$Apply,
+    [switch]$CleanupTemp,
+    [switch]$TuneOptionalServices
+)
 
 $ErrorActionPreference = 'Stop'
 if ([string]::IsNullOrWhiteSpace($PSScriptRoot)) {
@@ -60,6 +66,7 @@ function Restore-RegistryKey {
     }
 }
 function Invoke-Audit {
+    param([switch]$IncludeRdpCheck)
     Write-Log 'Auditoria somente leitura iniciada.'
     Write-Log ("Host={0}; Usuário={1}; PS={2}; Hora={3}; Fuso={4}" -f $env:COMPUTERNAME,[Security.Principal.WindowsIdentity]::GetCurrent().Name,$PSVersionTable.PSVersion,(Get-Date -Format o),(Get-TimeZone).Id)
     Get-OsInfo | Format-List | Out-String | ForEach-Object { Write-Log $_.TrimEnd() }
@@ -80,7 +87,7 @@ function Invoke-Audit {
         Get-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue | Select-Object DisplayName,Enabled,Profile,Direction,Action | Format-Table -AutoSize | Out-String | ForEach-Object { Write-Log $_.TrimEnd() }
     } catch { Write-Log "Consulta RDP parcial: $_" 'WARN' }
     try { Get-HotFix | Sort-Object InstalledOn -Descending | Select-Object -First 12 HotFixID,InstalledOn | Format-Table -AutoSize | Out-String | ForEach-Object { Write-Log $_.TrimEnd() } } catch {}
-    if ($CheckRdpRegression) { Test-RdpRegression }
+    if ($IncludeRdpCheck) { Test-RdpRegression }
     Write-Log "Auditoria concluída. Log: $Script:LogPath" 'OK'
 }
 function Test-RdpRegression {
@@ -174,6 +181,75 @@ function Set-UpdatePolicy {
         }
     }
 }
+function Invoke-CleanupTemp {
+    [CmdletBinding(SupportsShouldProcess=$true, ConfirmImpact='Low')]
+    param()
+    $targets = @(
+        (Join-Path $env:windir 'Temp'),
+        $env:TEMP
+    ) | Select-Object -Unique
+    $backupManifest = Join-Path $Script:BackupRoot 'cleanup-manifest.txt'
+    Set-Content -LiteralPath $backupManifest -Value ("Corte temporal (horas): 48`r`nEscopo: somente arquivos em Windows Temp e TEMP do operador; caches/perfis excluídos.") -Encoding UTF8
+    foreach ($path in $targets) {
+        if (-not (Test-Path -LiteralPath $path -PathType Container)) { continue }
+        if ($PSCmdlet.ShouldProcess($path,'Remover conteúdo antigo/temporário, preservando a pasta')) {
+            $cutoff = (Get-Date).AddDays(-2)
+            $removed = 0
+            Get-ChildItem -LiteralPath $path -File -Force -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -lt $cutoff } | ForEach-Object {
+                try { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop; $removed++ }
+                catch { Write-Log "Pulado (em uso/sem acesso): $($_.FullName)" 'WARN' }
+            }
+            Write-Log "Limpeza restrita a temporários: $path; itens antigos removidos=$removed" 'OK'
+        }
+    }
+}
+function Set-OptionalServiceTuning {
+    [CmdletBinding(SupportsShouldProcess=$true, ConfirmImpact='Low')]
+    param()
+    # Only nonessential consumer/telemetry services; never touch BITS, CryptSvc,
+    # IP Helper, Windows Update, Defender, firewall or role/OEM-specific services.
+    $servicePlan = [ordered]@{
+        SysMain = 'Manual'
+        WSearch = 'Manual'
+        DiagTrack = 'Disabled'
+        'diagnosticshub.standardcollector.service' = 'Disabled'
+        dmwappushservice = 'Disabled'
+        XboxGipSvc = 'Disabled'
+        XboxNetApiSvc = 'Disabled'
+        xbgm = 'Disabled'
+        XblGameSave = 'Disabled'
+        XblAuthManager = 'Disabled'
+    }
+    $serviceBackup = Join-Path $Script:BackupRoot 'optional-services-before.csv'
+    $snapshot = @()
+    foreach ($name in $servicePlan.Keys) {
+        $svc = Get-CimInstance Win32_Service -Filter "Name='$name'" -ErrorAction SilentlyContinue
+        if ($svc) { $snapshot += [pscustomobject]@{ Name=$name; StartMode=$svc.StartMode; State=$svc.State; DesiredStartType=$servicePlan[$name] } }
+    }
+    $snapshot | Export-Csv -LiteralPath $serviceBackup -NoTypeInformation -Encoding UTF8
+    $safeCandidates = @('DiagTrack','diagnosticshub.standardcollector.service','dmwappushservice','XblAuthManager','XblGameSave','XboxGipSvc','XboxNetApiSvc','xbgm')
+    foreach ($item in $snapshot) {
+        if ($item.Name -in @('SysMain','WSearch')) {
+            if ($PSCmdlet.ShouldProcess($item.Name,'Definir StartupType=Manual; não parar serviço')) {
+                Set-Service -Name $item.Name -StartupType Manual
+                if ((Get-Service -Name $item.Name).StartType.ToString() -ne 'Manual') { throw "Falha ao validar $($item.Name); backup: $serviceBackup" }
+                Write-Log "Serviço $($item.Name): StartupType=Manual; estado atual preservado." 'OK'
+            }
+            continue
+        }
+        if ($item.Name -notin $safeCandidates) {
+            Write-Log "Serviço $($item.Name) fora da allowlist; inalterado." 'INFO'
+            continue
+        }
+        if ($PSCmdlet.ShouldProcess($item.Name,'Definir StartupType=Disabled; preservar estado atual')) {
+            Set-Service -Name $item.Name -StartupType Disabled
+            if ((Get-Service -Name $item.Name).StartType.ToString() -ne 'Disabled') { throw "Falha ao validar $($item.Name); backup: $serviceBackup" }
+            Write-Log "Serviço $($item.Name): StartupType=Disabled; estado atual preservado." 'OK'
+        }
+    }
+    Write-Log 'Rollback: optional-services-before.csv registra StartupType e estado anterior; restaure StartupType pelo console, sem encerrar acesso SSH.' 'INFO'
+    Write-Log "Estado anterior dos serviços salvo em $serviceBackup" 'INFO'
+}
 function Invoke-SshSetup {
     $candidate = Join-Path $PSScriptRoot 'hermes-ssh-setup.ps1'
     if (-not (Test-Path -LiteralPath $candidate)) { throw "Script SSH não encontrado ao lado deste arquivo: $candidate. Coloque ao lado a versão revisada do repositório Wittemberg/utilitarios." }
@@ -182,7 +258,15 @@ function Invoke-SshSetup {
     try {
         $env:HERMES_SSH_ALLOW = '177.136.234.234,10.10.1.0/24,10.8.0.0/24'
         & $candidate
-        if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw "Script SSH retornou código $LASTEXITCODE" }
+        $sshExit = $LASTEXITCODE
+        if ($sshExit -and $sshExit -ne 0) { throw "Script SSH retornou código $sshExit" }
+        $rule = Get-NetFirewallRule -DisplayName 'OpenSSH Server - TCP 5822 (Hermes)' -ErrorAction Stop
+        $addresses = @($rule | Get-NetFirewallAddressFilter | Select-Object -ExpandProperty RemoteAddress)
+        if (-not ($addresses -contains '177.136.234.234') -or -not ($addresses -contains '10.10.1.0/255.255.255.0') -or -not ($addresses -contains '10.8.0.0/255.255.255.0')) {
+            throw 'A regra SSH não confirmou os três escopos esperados. Manter console e revisar firewall.'
+        }
+        if ((Get-Service sshd -ErrorAction Stop).Status -ne 'Running') { throw 'sshd não está em execução após setup; manter console.' }
+        Write-Log 'SSH validado: serviço ativo e regra 5822 com origens externa, WireGuard e OpenVPN.' 'OK'
     } finally {
         if ($null -eq $priorAllow) { Remove-Item Env:\HERMES_SSH_ALLOW -ErrorAction SilentlyContinue }
         else { $env:HERMES_SSH_ALLOW = $priorAllow }
@@ -194,16 +278,18 @@ try {
     Write-Log "Preparação iniciada: Apply=$Apply; Host=$env:COMPUTERNAME"
     if ($Apply) {
         Write-Log 'Apply solicitado; alterações serão feitas sem reboot do Windows.' 'WARN'
+        if ($TuneOptionalServices) { Write-Log 'Tuning opcional solicitado; somente tipos de inicialização da allowlist serão alterados.' 'WARN' }
         Get-OsInfo | Format-List | Out-String | ForEach-Object { Write-Log $_.TrimEnd() }
         Set-LocalSecurityPolicy
         Set-TimePolicy
         Set-UpdatePolicy
         Test-RdpRegression
         Invoke-SshSetup
+        if ($CleanupTemp) { Invoke-CleanupTemp }
+        if ($TuneOptionalServices) { Set-OptionalServiceTuning }
         Write-Log 'Preparação concluída. Nenhum reboot do Windows foi executado; valide acesso SSH/RDP.' 'OK'
     } else {
-        Invoke-Audit
-        Write-Log 'Auditoria concluída; sem alterações de política.' 'OK'
+        Invoke-Audit -IncludeRdpCheck:$true
     }
 } catch {
     Write-Log $_.Exception.Message 'ERROR'
