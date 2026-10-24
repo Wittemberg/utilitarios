@@ -126,8 +126,8 @@ function Set-LocalSecurityPolicy {
                 $rollbackDb = Join-Path $Script:BackupRoot 'secpol-rollback.sdb'
                 & secedit.exe /configure /db $rollbackDb /cfg $secBackup /areas SECURITYPOLICY /quiet | Out-Null
                 $rollbackExit = $LASTEXITCODE
-                if ($rollbackExit -ne 0) { throw "net accounts falhou em $change: $($output -join ' '); rollback secedit falhou ($rollbackExit). Backup: $secBackup" }
-                throw "net accounts falhou em $change: $($output -join ' '); política restaurada do backup secedit. Backup: $secBackup"
+                if ($rollbackExit -ne 0) { throw "net accounts falhou em ${change}: $($output -join ' '); rollback secedit falhou ($rollbackExit). Backup: $secBackup" }
+                throw "net accounts falhou em ${change}: $($output -join ' '); política restaurada do backup secedit. Backup: $secBackup"
             }
         }
         $after = Join-Path $Script:BackupRoot 'secpol-after.inf'
