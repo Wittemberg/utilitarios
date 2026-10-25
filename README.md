@@ -33,6 +33,45 @@ A execução é interativa. O script não cria snapshot e não reinicia o servid
 
 ## windows/
 
+### Preparar-Servidor-Windows.ps1
+
+Prepara e aplica hardening completo em instalação nova de Windows Server (2016, 2019, 2022, 2025 recém-instalado, sem updates ou alterações prévias).
+Unifica 100% dos procedimentos operacionais e de compatibilidade legada:
+- **Política de Senhas**: Mínimo de 6 caracteres, sem expiração, bloqueio após 5 falhas, janela de 15 min e complexidade ativada.
+- **Administrador Local**: Redefinição imediata da senha da conta de Administrador.
+- **Identificação**: Renomeação padronizada do computador.
+- **Relógio e Região**: Fuso Horário (-03:00 Brasília), formatação pt-BR e múltiplos peers NTP (`a.ntp.br`, `b.ntp.br`, `c.ntp.br`).
+- **Windows Update**: Configurado para notificar antes de baixar e instalar (`AUOptions=2`, sem reinício forçado com usuários logados).
+- **Desempenho**: Plano de Energia de Alto Desempenho e Paginação Fixa (48 GB / 72 GB para estabilidade RDS).
+- **Usabilidade**: Server Manager fechado no logon, sem diálogo de motivo de desligamento, sem exigência de CTRL+ALT+DEL, auto-start do `ctfmon.exe`, `EnableLinkedConnections=1` e desbloqueio de executáveis baixados.
+- **Terminal Server / RDP**: Porta 3389 aberta integralmente, sessão única por usuário, NLA desabilitado, `SecurityLayer=0` (RDP nativo para evitar erro interno e dar suporte a terminais legados), KeepAlive de 60s, tuning de buffer TCP/IP e redirecionamento de dispositivos USB.
+- **Licenciamento RDS**: Modo Por Dispositivo (2) apontado para `127.0.0.1` em Policies, RCM e WMI.
+- **Compatibilidade com ERPs Legados (Cobol, VB6, Delphi)**: Protocolo SMB1 ativo, acesso Guest e sem assinatura SMB, Spooler com `RpcAuthnLevelPrivacyEnabled=0` (sem erro 0x0000011b), Point & Print, UAC desativado (`EnableLUA=0`) e proteção em tempo real do Defender desativada.
+- **Tuning de Serviços**: Desativação de telemetria, serviços Xbox, Bluetooth e bloatware OEM, `SysMain` e `WSearch` como Manual, `WaitToKillServiceTimeout=2000` (rápido e seguro contra corrupção de bancos), mantendo `cryptsvc` e `bits` ativos e preservando núcleos para escalabilidade da VM.
+- **Limpeza Profunda**: Limpeza em todos os perfis de `C:\Users` (temporários, caches de navegadores, relatórios WER e cache RDP).
+- **Ferramentas**: Instalação das ferramentas administrativas do Active Directory (`RSAT-AD-Tools`) e download/instalação silenciosa do AWS CLI v2 com variáveis de ambiente Machine.
+- **SSH Hermes**: Instalação automática do OpenSSH Server na porta 5822 com login restrito por chave.
+
+Comando unificado em uma linha (solicita apenas o nome do servidor e a nova senha do Administrador):
+
+```powershell
+$d="$env:TEMP\WittembergServerPrep"; New-Item -ItemType Directory -Force $d | Out-Null; [Net.ServicePointManager]::SecurityProtocol='Tls12'; irm https://raw.githubusercontent.com/Wittemberg/utilitarios/main/windows/Preparar-Servidor-Windows.ps1 -OutFile "$d\Preparar-Servidor-Windows.ps1"; irm https://raw.githubusercontent.com/Wittemberg/utilitarios/main/windows/hermes-ssh-setup.ps1 -OutFile "$d\hermes-ssh-setup.ps1"; Unblock-File "$d\*.ps1"; & "$d\Preparar-Servidor-Windows.ps1" -NewComputerName "SRV-CLIENTE-XXXX" -SetAdminPassword "SuaSenhaAqui"
+```
+
+Execução local (PowerShell como Administrador):
+
+```powershell
+.\Preparar-Servidor-Windows.ps1 -NewComputerName "SRV-CLIENTE-XXXX" -SetAdminPassword "SuaSenhaAqui"
+```
+
+Se executado sem parâmetros, o script solicita o nome e a senha interativamente.
+Para executar apenas auditoria somente leitura (sem aplicar alterações):
+
+```powershell
+.\Preparar-Servidor-Windows.ps1 -Audit
+```
+
+
 ### hermes-ssh-setup.ps1
 
 Prepara Windows Server 2016+ para receber SSH do Hermes com Win32-OpenSSH, chave pública,
