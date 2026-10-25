@@ -52,10 +52,16 @@ Unifica 100% dos procedimentos operacionais e de compatibilidade legada:
 - **Ferramentas**: Instalação das ferramentas administrativas do Active Directory (`RSAT-AD-Tools`) e download/instalação silenciosa do AWS CLI v2 com variáveis de ambiente Machine.
 - **SSH Hermes**: Instalação automática do OpenSSH Server na porta 5822 com login restrito por chave.
 
-Comando unificado em uma linha (solicita apenas o nome do servidor e a nova senha do Administrador):
+Comando unificado em uma linha (com parâmetros):
 
 ```powershell
-$d="$env:TEMP\WittembergServerPrep"; New-Item -ItemType Directory -Force $d | Out-Null; [Net.ServicePointManager]::SecurityProtocol='Tls12'; irm https://raw.githubusercontent.com/Wittemberg/utilitarios/main/windows/Preparar-Servidor-Windows.ps1 -OutFile "$d\Preparar-Servidor-Windows.ps1"; irm https://raw.githubusercontent.com/Wittemberg/utilitarios/main/windows/hermes-ssh-setup.ps1 -OutFile "$d\hermes-ssh-setup.ps1"; Unblock-File "$d\*.ps1"; & "$d\Preparar-Servidor-Windows.ps1" -NewComputerName "SRV-CLIENTE-XXXX" -SetAdminPassword "SuaSenhaAqui"
+Set-ExecutionPolicy Bypass -Scope Process -Force; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $d="$env:TEMP\WittembergServerPrep"; New-Item -ItemType Directory -Force $d | Out-Null; iwr https://raw.githubusercontent.com/Wittemberg/utilitarios/main/windows/Preparar-Servidor-Windows.ps1 -OutFile "$d\Preparar-Servidor-Windows.ps1" -UseBasicParsing; iwr https://raw.githubusercontent.com/Wittemberg/utilitarios/main/windows/hermes-ssh-setup.ps1 -OutFile "$d\hermes-ssh-setup.ps1" -UseBasicParsing; Unblock-File "$d\*.ps1"; & "$d\Preparar-Servidor-Windows.ps1" -NewComputerName "SRV-CLIENTE-XXXX" -SetAdminPassword "SuaSenhaAqui"
+```
+
+Comando em uma linha interativo (pergunta o nome e senha na tela):
+
+```powershell
+Set-ExecutionPolicy Bypass -Scope Process -Force; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $d="$env:TEMP\WittembergServerPrep"; New-Item -ItemType Directory -Force $d | Out-Null; iwr https://raw.githubusercontent.com/Wittemberg/utilitarios/main/windows/Preparar-Servidor-Windows.ps1 -OutFile "$d\Preparar-Servidor-Windows.ps1" -UseBasicParsing; iwr https://raw.githubusercontent.com/Wittemberg/utilitarios/main/windows/hermes-ssh-setup.ps1 -OutFile "$d\hermes-ssh-setup.ps1" -UseBasicParsing; Unblock-File "$d\*.ps1"; & "$d\Preparar-Servidor-Windows.ps1"
 ```
 
 Execução local (PowerShell como Administrador):

@@ -29,7 +29,7 @@
     - SSH Hermes: Instalação do OpenSSH Server na porta personalizada 5822 com acesso por chave
 
     USO EM UMA LINHA:
-    $d="$env:TEMP\WittembergServerPrep"; New-Item -ItemType Directory -Force $d | Out-Null; [Net.ServicePointManager]::SecurityProtocol='Tls12'; irm https://raw.githubusercontent.com/Wittemberg/utilitarios/main/windows/Preparar-Servidor-Windows.ps1 -OutFile "$d\Preparar-Servidor-Windows.ps1"; irm https://raw.githubusercontent.com/Wittemberg/utilitarios/main/windows/hermes-ssh-setup.ps1 -OutFile "$d\hermes-ssh-setup.ps1"; Unblock-File "$d\*.ps1"; & "$d\Preparar-Servidor-Windows.ps1" -NewComputerName "SRV-CLIENTE-XXXX" -SetAdminPassword "SuaSenhaAqui"
+    Set-ExecutionPolicy Bypass -Scope Process -Force; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $d="$env:TEMP\WittembergServerPrep"; New-Item -ItemType Directory -Force $d | Out-Null; iwr https://raw.githubusercontent.com/Wittemberg/utilitarios/main/windows/Preparar-Servidor-Windows.ps1 -OutFile "$d\Preparar-Servidor-Windows.ps1" -UseBasicParsing; iwr https://raw.githubusercontent.com/Wittemberg/utilitarios/main/windows/hermes-ssh-setup.ps1 -OutFile "$d\hermes-ssh-setup.ps1" -UseBasicParsing; Unblock-File "$d\*.ps1"; & "$d\Preparar-Servidor-Windows.ps1" -NewComputerName "SRV-CLIENTE-XXXX" -SetAdminPassword "SuaSenhaAqui"
 
     USO LOCAL (PowerShell como Administrador):
     .\Preparar-Servidor-Windows.ps1 -NewComputerName "SRV-CLIENTE-01" -SetAdminPassword "MinhaSenhaForte"
@@ -222,13 +222,22 @@ function Set-LocalSecurityPolicy {
 function Set-AdminPasswordRoutine {
     param([Parameter(Mandatory)][string]$Password)
     Write-Log 'Aplicando nova senha na conta de Administrador local...'
+    $applied = $false
     try {
         $secStr = ConvertTo-SecureString $Password -AsPlainText -Force
         Set-LocalUser -Name "Administrator" -Password $secStr -ErrorAction SilentlyContinue
         Set-LocalUser -Name "Administrador" -Password $secStr -ErrorAction SilentlyContinue
+        $applied = $true
+    } catch {}
+    try {
+        & net.exe user Administrator $Password 2>$null | Out-Null
+        & net.exe user Administrador $Password 2>$null | Out-Null
+        $applied = $true
+    } catch {}
+    if ($applied) {
         Write-Log 'Senha do Administrador local redefinida com sucesso.' 'OK'
-    } catch {
-        Write-Log "Erro ao redefinir senha do Administrador: $_" 'WARN'
+    } else {
+        Write-Log 'Aviso: Não foi possível redefinir a senha do Administrador local.' 'WARN'
     }
 }
 
@@ -644,16 +653,23 @@ try {
         return
     }
 
-    # Solicita interativamente parâmetros se não fornecidos
+    # Tratamento flexível de parâmetros (interativo ou via linha de comando)
     if ([string]::IsNullOrWhiteSpace($NewComputerName)) {
-        $NewComputerName = Read-Host "Informe o novo nome do servidor (ex: SRV-CLIENTE-01)"
-    }
-    if ([string]::IsNullOrWhiteSpace($SetAdminPassword)) {
-        $SetAdminPassword = Read-Host "Informe a nova senha do Administrador local"
+        Write-Host "Nome do servidor não fornecido via parâmetro." -ForegroundColor Cyan
+        $inputName = Read-Host "Informe o novo nome do servidor (ou pressione ENTER para manter '$env:COMPUTERNAME')"
+        if (-not [string]::IsNullOrWhiteSpace($inputName)) {
+            $NewComputerName = $inputName.Trim()
+        } else {
+            $NewComputerName = $env:COMPUTERNAME
+        }
     }
 
-    if ([string]::IsNullOrWhiteSpace($NewComputerName) -or [string]::IsNullOrWhiteSpace($SetAdminPassword)) {
-        throw "Nome do computador (-NewComputerName) e Senha do Administrador (-SetAdminPassword) são obrigatórios para a preparação."
+    if ([string]::IsNullOrWhiteSpace($SetAdminPassword)) {
+        Write-Host "Senha do Administrador não fornecida via parâmetro." -ForegroundColor Cyan
+        $inputPass = Read-Host "Informe a nova senha do Administrador local (ou pressione ENTER para NÃO alterar a senha atual)"
+        if (-not [string]::IsNullOrWhiteSpace($inputPass)) {
+            $SetAdminPassword = $inputPass
+        }
     }
 
     Write-Log "Preparação iniciada para o servidor: $NewComputerName" 'INFO'
@@ -662,11 +678,19 @@ try {
     # 1. Política Local de Senha e Bloqueio
     Set-LocalSecurityPolicy
 
-    # 2. Redefinição de Senha do Administrador
-    Set-AdminPasswordRoutine -Password $SetAdminPassword
+    # 2. Redefinição de Senha do Administrador (se informada)
+    if (-not [string]::IsNullOrWhiteSpace($SetAdminPassword)) {
+        Set-AdminPasswordRoutine -Password $SetAdminPassword
+    } else {
+        Write-Log 'Nenhuma nova senha informada para o Administrador; senha atual preservada.' 'INFO'
+    }
 
-    # 3. Renomeação do Servidor
-    Set-ComputerNameRoutine -Name $NewComputerName
+    # 3. Renomeação do Servidor (se diferente da atual)
+    if (-not [string]::IsNullOrWhiteSpace($NewComputerName) -and $NewComputerName -ne $env:COMPUTERNAME) {
+        Set-ComputerNameRoutine -Name $NewComputerName
+    } else {
+        Write-Log "Nome do computador mantido como '$env:COMPUTERNAME'." 'INFO'
+    }
 
     # 4. Fuso Horário, Região e NTP
     Set-TimeAndRegionalSettings
