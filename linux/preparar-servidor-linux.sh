@@ -284,8 +284,12 @@ if ask_yes_no 'Aplicar SSH exclusivamente na porta 5822 e desativar autenticaç�
         die 'Validação pós-recarga falhou; configuração anterior restaurada.'
     fi
     systemctl is-active --quiet ssh || die 'O serviço SSH não está ativo após a alteração.'
-    printf 'Listeners SSH:\n'
-    ss -lntp | grep -E 'sshd.*:5822' || die 'Porta 5822 não aparece em escuta.'
+    printf 'Listeners SSH na porta %s:\n' "$SSH_PORT"
+    ssh_listeners=$(ss -H -lntp "sport = :${SSH_PORT}")
+    if [[ -z $ssh_listeners ]] || ! grep -q 'sshd' <<< "$ssh_listeners"; then
+        die "Porta ${SSH_PORT} não aparece em escuta pelo sshd."
+    fi
+    printf '%s\n' "$ssh_listeners"
     printf 'SSH ativo exclusivamente na porta 5822; autenticação por senha desativada.\n'
 else
     restore_ssh_config
