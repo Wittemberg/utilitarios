@@ -155,9 +155,16 @@ function Set-TimePolicy {
     Backup-RegistryKey -Key 'HKLM\SYSTEM\CurrentControlSet\Services\W32Time\Parameters' -File (Join-Path $Script:BackupRoot 'w32time-parameters.reg')
     if ($PSCmdlet.ShouldProcess('Windows Time',"Configurar peer NTP $peer e reiniciar w32time")) {
         Set-Service w32time -StartupType Automatic
+        $timeService = Get-Service -Name w32time -ErrorAction Stop
+        if ($timeService.Status -ne 'Running') {
+            Start-Service -Name w32time -ErrorAction Stop
+            $timeService = Get-Service -Name w32time -ErrorAction Stop
+        }
+        if ($timeService.Status -ne 'Running') { throw 'O serviço Windows Time não iniciou; configuração NTP cancelada.' }
         & w32tm.exe /config "/manualpeerlist:$peer" /syncfromflags:manual /update | ForEach-Object { Write-Log $_ }
-        if ($LASTEXITCODE -ne 0) { throw 'w32tm /config falhou.' }
-        Restart-Service w32time
+        $configExit = $LASTEXITCODE
+        if ($configExit -ne 0) { throw "w32tm /config falhou (código $configExit)." }
+        Restart-Service w32time -ErrorAction Stop
         & w32tm.exe /resync /rediscover | ForEach-Object { Write-Log $_ }
         if ($LASTEXITCODE -ne 0) { Write-Log 'Resync não confirmou sincronismo; verificar DNS, UDP/123 e origem NTP.' 'WARN' }
         & w32tm.exe /query /status | ForEach-Object { Write-Log $_ }
