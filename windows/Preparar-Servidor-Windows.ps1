@@ -48,13 +48,26 @@ function Assert-Standalone {
 function Backup-RegistryKey {
     param([Parameter(Mandatory)][string]$Key,[Parameter(Mandatory)][string]$File)
     $null = New-Item -ItemType Directory -Path (Split-Path $File -Parent) -Force
-    $r = & reg.exe query $Key 2>$null
-    if ($LASTEXITCODE -ne 0) {
+    if ($Key -match '^HKLM\\') { $providerPath = 'HKLM:\' + $Key.Substring(5) }
+    elseif ($Key -match '^HKCU\\') { $providerPath = 'HKCU:\' + $Key.Substring(5) }
+    else { throw "Hive de registro não suportado para backup: $Key" }
+    if (-not (Test-Path -LiteralPath $providerPath)) {
         Set-Content -LiteralPath ($File + '.absent-before-change') -Value "A chave $Key não existia antes da execução; rollback requer remover somente os valores criados por este script." -Encoding UTF8
         return
     }
-    & reg.exe export $Key $File /y | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "Falha ao exportar backup do registro: $Key" }
+    $regPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell 5 pode transformar stderr de executável nativo em
+        # NativeCommandError mesmo quando queremos inspecionar LASTEXITCODE.
+        $ErrorActionPreference = 'Continue'
+        $regOutput = & reg.exe export $Key $File /y 2>&1
+        $regExit = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $regPreference
+    }
+    if ($regExit -ne 0 -or -not (Test-Path -LiteralPath $File)) {
+        throw "Falha ao exportar backup do registro: $Key. Código=$regExit; saída=$($regOutput -join ' ')"
+    }
 }
 function Restore-RegistryKey {
     param([Parameter(Mandatory)][string]$Key,[Parameter(Mandatory)][string]$BackupFile)
@@ -220,7 +233,6 @@ function Set-OptionalServiceTuning {
     # IP Helper, Windows Update, Defender, firewall or role/OEM-specific services.
     $servicePlan = [ordered]@{
         SysMain = 'Manual'
-        WSearch = 'Manual'
         DiagTrack = 'Disabled'
         'diagnosticshub.standardcollector.service' = 'Disabled'
         dmwappushservice = 'Disabled'
