@@ -47,7 +47,11 @@ param(
     [string]$SetAdminPassword,
 
     [switch]$Audit,
-    [switch]$Force
+    [switch]$Force,
+
+    # O padrão preserva o comportamento de preparação para Windows Server.
+    # Em Windows cliente (10/11), informe -WindowsServer:$false.
+    [bool]$WindowsServer = $true
 )
 
 $ErrorActionPreference = 'Stop'
@@ -186,21 +190,30 @@ function Test-RdpRegression {
 # =====================================================================
 
 function Set-LocalSecurityPolicy {
-    Write-Log 'Configurando Política Local de Contas e Senhas...'
+    Write-Log "Configurando Política Local de Contas e Senhas (perfil WindowsServer=$WindowsServer)..."
     if (Assert-Standalone) {
         $secBackup = Join-Path $Script:BackupRoot 'secpol-before.inf'
         & secedit.exe /export /cfg $secBackup /areas SECURITYPOLICY | Out-Null
-        
-        # Mínimo 6 caracteres, sem expiração, bloqueio após 5 falhas, janela 15 min
-        $changes = @(
-            '/minpwlen:6',
-            '/maxpwage:unlimited',
-            '/lockoutthreshold:5',
-            '/lockoutwindow:15'
-        )
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $secBackup)) {
+            throw 'Não foi possível exportar a política de segurança para backup; nenhuma alteração de política foi feita.'
+        }
+
+        # A edição cliente não usa a mesma opção de janela; aplicar apenas opções verificadas.
+        $changes = @('/minpwlen:6','/maxpwage:unlimited','/lockoutthreshold:5')
+        if ($WindowsServer) { $changes += '/lockoutwindow:15' }
         foreach ($change in $changes) {
             $out = & net.exe accounts $change 2>&1
+            $nativeExit = $LASTEXITCODE
             Write-Log "net accounts $change : $($out -join ' ')"
+            if ($nativeExit -ne 0) {
+                $rollbackDb = Join-Path $Script:BackupRoot 'secpol-rollback.sdb'
+                & secedit.exe /configure /db $rollbackDb /cfg $secBackup /areas SECURITYPOLICY /quiet | Out-Null
+                $rollbackExit = $LASTEXITCODE
+                if ($rollbackExit -ne 0) {
+                    throw "net accounts falhou em ${change} (código $nativeExit); rollback também falhou (código $rollbackExit). Backup: $secBackup"
+                }
+                throw "net accounts falhou em ${change} (código $nativeExit); política restaurada do backup. Backup: $secBackup"
+            }
         }
         
         # Ativa Complexidade de Senhas via secedit
